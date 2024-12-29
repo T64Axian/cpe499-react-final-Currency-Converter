@@ -1,102 +1,177 @@
+//App.js
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import { db, collection, addDoc, deleteDoc, doc, onSnapshot, getDocs } from './firebase';
 import './App.css';
-import './index.css'
-import React, { useState, useEffect } from 'react'
 
-function App() {
 
-  // state
-  const [weight, setWeight] = useState('')
-  const [height, setHeight] = useState('')
-  const [bmi, setBmi] = useState('')
-  const [message, setMessage] = useState('')
-  const [visitCount, setVisitCount] = useState(0) // สร้าง state สำหรับเก็บจำนวนผู้เข้าชม
+function CurrencyConverter() {
+  // สร้าง state สำหรับการจัดการข้อมูล
+  const [amount, setAmount] = useState(1);  // จำนวนเงินที่ต้องการแปลง
+  const [convertedAmount, setConvertedAmount] = useState(0); // จำนวนเงินที่แปลงแล้ว
+  const [exchangeRates, setExchangeRates] = useState({}); // อัตราแลกเปลี่ยน
+  const [fromCurrency, setFromCurrency] = useState('USD');  // สกุลเงินที่ต้องการแปลง
+  const [toCurrency, setToCurrency] = useState('THB');  // สกุลเงินที่จะแปลงไป
+  const [loading, setLoading] = useState(true);  // สถานะการโหลดข้อมูล
+  const [exchangeHistory, setExchangeHistory] = useState([]);  // ประวัติการแปลงสกุลเงิน
 
+  // ฟังก์ชันดึงข้อมูลอัตราแลกเปลี่ยนจาก API เมื่อจากเปลี่ยนสกุลเงินต้น
   useEffect(() => {
-    // เมื่อหน้าเว็บโหลดให้ตรวจสอบจำนวนครั้งที่เข้าชม
-    let count = localStorage.getItem('visitCount')
-
-    if (count) {
-      // ถ้ามีข้อมูลอยู่แล้ว เพิ่มค่าอีก 1
-      count = parseInt(count) + 1
-    } else {
-      // ถ้ายังไม่มี ให้ตั้งค่าเป็น 1
-      count = 1
-    }
-
-    // เก็บค่าใหม่ใน localStorage
-    localStorage.setItem('visitCount', count)
-
-    // อัปเดต state
-    setVisitCount(count)
-  }, []) // ทำงานเพียงครั้งเดียวเมื่อโหลดหน้าเว็บ
-
-  let calcBmi = (event) => {
-    // prevent submitting to the server
-    event.preventDefault()
-
-    if (!weight && !height) {
-      alert('กรุณากรอกน้ำหนักและส่วนสูง')
-    } else if (!weight) {
-      alert('กรุณากรอกน้ำหนัก')
-    } else if (!height) {
-      alert('กรุณากรอกส่วนสูง')
-    } else {
-      // คำนวณ BMI โดยใช้ kg และ m
-      let bmi = (weight / ((height / 100) * (height / 100)))
-      setBmi(bmi.toFixed(1))
-
-      // Logic for message (ภาษาไทย)
-      if (bmi < 18.5) {
-        setMessage('คุณมีน้ำหนักน้อยกว่าปกติต้องเพิ่มน้ำหนักอีก')
-      } else if (bmi >= 18.5 && bmi < 24.9) {
-        setMessage('คุณมีน้ำหนักปกติรักษาน้ำหนักนี้ต้อไป')
-      } else if (bmi >= 25 && bmi < 29.9) {
-        setMessage('คุณมีน้ำหนักเกินสมควรลดได้แล้ว')
-      } else {
-        setMessage('คุณเป็นโรคอ้วน โรคอื่นๆ จดชื่อคุณแล้ว')
+    const fetchExchangeRate = async () => {
+      try {
+        const response = await axios.get(`https://v6.exchangerate-api.com/v6/a20d39beb622510971171fb7/latest/${fromCurrency}`);
+        setExchangeRates(response.data.conversion_rates); // เก็บอัตราแลกเปลี่ยนที่ได้รับ
+        setLoading(false);  // หยุดการโหลดข้อมูล
+      } catch (error) {
+        console.error('Error fetching exchange rates:', error);
+        setLoading(false);  // หยุดการโหลดข้อมูลเมื่อเกิดข้อผิดพลาด
       }
-    }
-  }
+    };
 
-  let reload = () => {
-    window.location.reload()
-  }
+    fetchExchangeRate(); // เรียกใช้งานฟังก์ชัน
+  }, [fromCurrency]); // ทำงานใหม่ทุกครั้งเมื่อจากสกุลเงินต้นเปลี่ยนแปลง
+
+  // ฟังก์ชันคำนวณจำนวนเงินที่แปลงแล้ว
+  useEffect(() => {
+    if (exchangeRates[toCurrency]) {
+      setConvertedAmount((amount * exchangeRates[toCurrency]).toFixed(2)); // คำนวณการแปลงสกุลเงิน
+    }
+  }, [amount, exchangeRates, toCurrency]); // ทำงานใหม่เมื่อจำนวนเงินหรืออัตราแลกเปลี่ยนเปลี่ยนแปลง
+
+  // Real-Time Listener ที่ฟังการเปลี่ยนแปลงใน Firestore
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'currencyExchangeRates'), (querySnapshot) => {
+      const history = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        timestamp: doc.data().timestamp.toDate(),
+      }));
+      setExchangeHistory(history); // อัปเดตประวัติการแปลง
+    });
+
+    return () => unsubscribe(); // ทำการยกเลิกการฟังเมื่อ component ถูกลบ
+  }, []); // ทำงานเพียงครั้งเดียวเมื่อ component โหลด
+
+  // ฟังก์ชันบันทึกข้อมูลลง Firebase
+  const saveDataToFirebase = async () => {
+    try {
+      await addDoc(collection(db, 'currencyExchangeRates'), {
+        amount,
+        fromCurrency,
+        toCurrency,
+        convertedAmount,
+        timestamp: new Date(),
+      });
+      alert('Data saved successfully!');  // แสดงข้อความเมื่อบันทึกสำเร็จ
+    } catch (e) {
+      console.error('Error adding document: ', e);  // แสดงข้อผิดพลาดหากเกิดข้อผิดพลาดในการบันทึกข้อมูล
+    }
+  };
+
+  // ฟังก์ชันลบข้อมูลจาก Firebase
+  const deleteDataFromFirebase = async (id) => {
+    try {
+      const docRef = doc(db, 'currencyExchangeRates', id);
+      await deleteDoc(docRef);  // ลบข้อมูลจาก Firestore
+    } catch (e) {
+      console.error('Error deleting document: ', e);  // แสดงข้อผิดพลาดหากเกิดข้อผิดพลาดในการลบข้อมูล
+    }
+  };
+
+  // ลบข้อมูลทั้งหมดเมื่อปิดหรือรีโหลดเว็บ
+  useEffect(() => {
+    const clearDataOnUnload = () => {
+      getDocs(collection(db, 'currencyExchangeRates')).then((querySnapshot) => {
+        querySnapshot.forEach((doc) => {
+          deleteDoc(doc.ref); // ลบเอกสารทั้งหมด
+        });
+      });
+    };
+
+    window.onbeforeunload = () => {
+      clearDataOnUnload(); // ลบข้อมูลเมื่อผู้ใช้ปิดหรือรีโหลดหน้าเว็บ
+    };
+
+    return () => {
+      window.onbeforeunload = null; // ลบการตั้งค่าเมื่อ component ถูก unmount
+    };
+  }, []); // ทำงานเพียงครั้งเดียวเมื่อโหลด component 
 
   return (
-    <div className="app">
-      <div className='container'>
-        <h2 className='center'>เครื่องคำนวณดัชนีมวลกาย (BMI)</h2>
-        <form onSubmit={calcBmi}>
+    <div className="currency-converter">
+      <h1>Currency Converter</h1>
 
-          <div>
-            <label>น้ำหนัก (กก.)</label>
-            <input value={weight} onChange={(e) => setWeight(e.target.value)} />
-          </div>
+      {/* เลือกสกุลเงินต้น */}
+      <div>
+        <label htmlFor="fromCurrency">From Currency: </label>
+        <select
+          id="fromCurrency"
+          value={fromCurrency}
+          onChange={(e) => setFromCurrency(e.target.value)} // เมื่อเลือกสกุลเงินต้องแปลง
+        >
+          <option value="USD">USD</option>
+          <option value="EUR">EUR</option>
+          <option value="GBP">GBP</option>
+          <option value="JPY">JPY</option>
+          <option value="AUD">AUD</option>
+          <option value="THB">THB</option>
+        </select>
+      </div>
 
-          <div>
-            <label>ส่วนสูง (ซม.)</label>
-            <input value={height} onChange={(e) => setHeight(e.target.value)} />
-          </div>
+      {/* จำนวนเงินที่ต้องการแปลง */}
+      <div>
+        <input
+          type="number"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}  // เมื่อจำนวนเงินแปลง
+          placeholder={`Enter amount in ${fromCurrency}`}
+        />
+      </div>
 
-          <div>
-            <button className='btn' type='submit'>คำนวณ</button>
-            <button className='btn btn-outline' onClick={reload} type='button'>เริ่มใหม่</button>
-          </div>
-        </form>
+      {/* เลือกสกุลเงินที่ต้องการแปลงไป */}
+      <div>
+        <label htmlFor="toCurrency">To Currency: </label>
+        <select
+          id="toCurrency"
+          value={toCurrency}
+          onChange={(e) => setToCurrency(e.target.value)} // เมื่อเลือกสกุลเงินที่แปลงไปเปลี่ยนแปลง
+        >
+          <option value="USD">USD</option>
+          <option value="EUR">EUR</option>
+          <option value="GBP">GBP</option>
+          <option value="JPY">JPY</option>
+          <option value="AUD">AUD</option>
+          <option value="THB">THB</option>
+        </select>
+      </div>
 
-        <div className='center'>
-          <h3>ค่าดัชนีมวลกายของคุณคือ: {bmi}</h3>
-          <p>{message}</p>
+      {/* แสดงผลลัพธ์เมื่อโหลดข้อมูลเสร็จ */}
+      {loading ? (
+        <p>Loading exchange rates...</p>  // แสดงข้อความขณะโหลดข้อมูล
+      ) : (
+        <div>
+          <p>
+            {amount} {fromCurrency} = {convertedAmount} {toCurrency} {/* แสดงผลลัพธ์การแปลง */}
+          </p>
         </div>
+      )}
 
-        
-      </div>
-      <div className='center'>
-          <h4>จำนวนผู้เข้าชม: {visitCount}</h4> {/* แสดงจำนวนผู้เข้าชม */}
-      </div>
-      <h4>จัดทำโดย : 640416 ชัยวัฒน์ แตวสุขเจริญ</h4>
+      <button onClick={saveDataToFirebase}>Save</button> {/* ปุ่มบันทึกข้อมูล */}
+
+      <h2>Exchange History</h2>
+      {/* แสดงประวัติการแปลง */}
+      <ul>
+        {exchangeHistory.map((record) => (
+          <li key={record.id}>
+            {record.amount} {record.fromCurrency} = {record.convertedAmount} {record.toCurrency} - 
+            {record.timestamp instanceof Date && !isNaN(record.timestamp) ? 
+            record.timestamp.toLocaleString() : 'Invalid Date'}
+            <button onClick={() => deleteDataFromFirebase(record.id)}>Delete</button>  {/* ปุ่มลบข้อมูล */}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
 
-export default App;
+export default CurrencyConverter;
